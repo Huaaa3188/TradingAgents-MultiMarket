@@ -23,6 +23,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from tradingagents.dataflows.config import get_config
+
 # LLMs sometimes write a placeholder string ("None", "N/A", ...) into an optional
 # numeric field instead of omitting it. Coerce those to None so the structured
 # call validates instead of erroring (#1058). Pydantic still parses real numeric
@@ -35,8 +37,6 @@ def _coerce_optional_float(value):
         return None
     return value
 
-
-from tradingagents.dataflows.config import get_config
 
 # ---------------------------------------------------------------------------
 # Shared rating types

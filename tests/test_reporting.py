@@ -19,6 +19,25 @@ def _state():
     }
 
 
+def _contract_status():
+    return {
+        "overall": "warning",
+        "checks": [
+            {
+                "status": "pass",
+                "source": "tiantian_fund_nav",
+                "symbol": "012920",
+                "semantic": "nav",
+                "expected_semantic": "nav",
+                "as_of": "2026-05-22",
+                "rows": 3,
+                "failures": [],
+                "warnings": ["nav_semantic"],
+            }
+        ],
+    }
+
+
 @pytest.mark.unit
 def test_write_report_tree_creates_files(tmp_path):
     out = write_report_tree(_state(), "AAPL", tmp_path)
@@ -31,6 +50,20 @@ def test_write_report_tree_creates_files(tmp_path):
     complete = out.read_text()
     assert "Trading Analysis Report: AAPL" in complete
     assert "MKT" in complete and "PM DECISION" in complete
+
+
+@pytest.mark.unit
+def test_write_report_tree_writes_data_reliability(tmp_path):
+    state = {**_state(), "data_contract_status": _contract_status()}
+
+    out = write_report_tree(state, "012920", tmp_path)
+
+    reliability = tmp_path / "data_reliability.md"
+    assert reliability.exists()
+    assert "## Data Reliability" in reliability.read_text(encoding="utf-8")
+    complete = out.read_text(encoding="utf-8")
+    assert "tiantian_fund_nav" in complete
+    assert "nav_semantic" in complete
 
 
 @pytest.mark.unit
