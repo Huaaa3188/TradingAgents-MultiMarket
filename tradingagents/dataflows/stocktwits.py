@@ -20,6 +20,8 @@ import logging
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .symbol_utils import crypto_base
+
 logger = logging.getLogger(__name__)
 
 _API = "https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
@@ -35,6 +37,17 @@ def _error_label(exc: Exception) -> str:
     return type(exc).__name__
 
 
+def _stocktwits_symbol(ticker: str) -> str:
+    """Map a crypto pair to StockTwits' ``<BASE>.X`` convention.
+
+    StockTwits lists crypto as ``BTC.X`` (Yahoo's ``BTC-USD`` form 404s), so any
+    crypto symbol resolves to its base plus ``.X``; other symbols pass through
+    upper-cased.
+    """
+    base = crypto_base(ticker)
+    return f"{base}.X" if base else ticker.strip().upper()
+
+
 def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.0) -> str:
     """Fetch recent StockTwits messages for ``ticker`` and return them as a
     formatted plaintext block ready for prompt injection.
@@ -43,7 +56,7 @@ def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.
     symbol has no messages, or the response shape is unexpected — the
     caller never has to special-case None or exceptions.
     """
-    url = _API.format(ticker=ticker.upper())
+    url = _API.format(ticker=_stocktwits_symbol(ticker))
     req = Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
     try:
         with urlopen(req, timeout=timeout) as resp:
