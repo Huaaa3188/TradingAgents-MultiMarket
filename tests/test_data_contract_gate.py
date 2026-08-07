@@ -85,6 +85,18 @@ def test_gate_fails_future_data():
 
 
 @pytest.mark.unit
+def test_gate_fails_unparseable_as_of():
+    gate = validate_data_result(
+        _result(as_of="not-a-date"),
+        analysis_date="2026-05-22",
+        expected_semantic="ohlcv",
+    )
+
+    assert gate.ok is False
+    assert [notice.code for notice in gate.failures] == ["invalid_as_of"]
+
+
+@pytest.mark.unit
 def test_gate_fails_stale_data_when_threshold_exceeded():
     gate = validate_data_result(
         _result(as_of="2026-05-01"),
@@ -155,3 +167,67 @@ def test_initial_graph_state_has_empty_data_contract_status():
     state = Propagator().create_initial_state("COF", "2026-05-22")
 
     assert state["data_contract_status"] == {"overall": "not_checked", "checks": []}
+
+
+@pytest.mark.unit
+def test_lenient_gate_downgrades_stale_to_warning():
+    from tradingagents.dataflows.config import set_config
+
+    set_config({"data_contract_gate": "lenient"})
+    gate = validate_data_result(
+        _result(as_of="2026-05-01"),
+        analysis_date="2026-05-22",
+        expected_semantic="ohlcv",
+        max_staleness_days=10,
+    )
+
+    assert gate.ok is True
+    assert "stale_data" in [n.code for n in gate.warnings]
+    assert "stale_data" not in [n.code for n in gate.failures]
+
+
+@pytest.mark.unit
+def test_lenient_gate_keeps_future_and_schema_drift_hard_failures():
+    from tradingagents.dataflows.config import set_config
+
+    set_config({"data_contract_gate": "lenient"})
+
+    future = validate_data_result(
+        _result(as_of="2026-05-23"),
+        analysis_date="2026-05-22",
+        expected_semantic="ohlcv",
+    )
+    assert future.ok is False
+    assert [n.code for n in future.failures] == ["future_data"]
+
+    drift = validate_data_result(
+        _result(error_type="schema_drift", notices=(data_notice("schema_drift", "drift"),)),
+        analysis_date="2026-05-22",
+        expected_semantic="ohlcv",
+    )
+    assert drift.ok is False
+    assert "schema_drift" in [n.code for n in drift.failures]
+
+
+@pytest.mark.unit
+def test_strict_is_default_and_unchanged():
+    # conftest resets dataflows config to DEFAULT_CONFIG (data_contract_gate="strict").
+    gate = validate_data_result(
+        _result(as_of="2026-05-01"),
+        analysis_date="2026-05-22",
+        expected_semantic="ohlcv",
+        max_staleness_days=10,
+    )
+
+    assert gate.ok is False
+    assert [n.code for n in gate.failures] == ["stale_data"]
+
+
+@pytest.mark.unit
+def test_data_contract_gate_env_override_mapping():
+    import tradingagents.default_config as default_config
+
+    assert default_config._ENV_OVERRIDES["TRADINGAGENTS_DATA_CONTRACT_GATE"] == "data_contract_gate"
+    assert default_config.DEFAULT_CONFIG["data_contract_gate"] == "strict"
+    # String values pass through the env coercion untouched.
+    assert default_config._coerce("lenient", "strict") == "lenient"

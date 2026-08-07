@@ -126,6 +126,21 @@ def render_notices(notices: tuple[DataNotice, ...] | list[DataNotice]) -> str:
     return "\n".join(lines)
 
 
+def _gate_strictness() -> str:
+    """Read the contract-gate strictness from the current dataflow config.
+
+    ``strict`` (the default) is fail-closed: stale data is a hard failure.
+    ``lenient`` is for operators who accept degraded freshness: ``stale``
+    downgrades to a warning while look-ahead (``future_data``) and
+    ``schema_drift`` stay hard failures. Read lazily at validation time so the
+    module stays import-light.
+    """
+    from .config import get_config
+
+    configured = get_config().get("data_contract_gate") or "strict"
+    return "strict" if configured in ("strict", True) else "lenient"
+
+
 def validate_data_result(
     result: DataResult,
     *,
@@ -136,7 +151,15 @@ def validate_data_result(
     allow_missing: bool = False,
     stale_fails: bool = True,
 ) -> ContractGateResult:
-    """Fail closed when a structured data result is unsafe for factual claims."""
+    """Fail closed when a structured data result is unsafe for factual claims.
+
+    In ``lenient`` gate mode (config key ``data_contract_gate`` / env
+    ``TRADINGAGENTS_DATA_CONTRACT_GATE``) ``stale_fails`` is overridden to
+    ``False``: stale data then surfaces as a warning, while ``future_data``
+    (look-ahead) and ``schema_drift`` remain hard failures.
+    """
+    if _gate_strictness() == "lenient" and not allow_missing:
+        stale_fails = False
     failures: list[DataNotice] = []
     warnings: list[DataNotice] = []
 

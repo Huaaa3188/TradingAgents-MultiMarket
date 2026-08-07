@@ -18,6 +18,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_ENABLE_DATA_CACHE":    "enable_data_cache",
+    "TRADINGAGENTS_DATA_CONTRACT_GATE":   "data_contract_gate",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
     "TRADINGAGENTS_LLM_MAX_RETRIES":      "llm_max_retries",
     # Provider-specific reasoning/thinking knobs (None = each provider's own
@@ -80,6 +81,11 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "memory_log_max_entries": None,
     # Data cache toggle
     "enable_data_cache": True,
+    # Contract-gate strictness for China data reliability. "strict" (default)
+    # is fail-closed: stale_data is a hard failure. "lenient" downgrades
+    # stale_data to a warning while future_data (look-ahead) and schema_drift
+    # remain hard failures. Settable via TRADINGAGENTS_DATA_CONTRACT_GATE.
+    "data_contract_gate": "strict",
     # LLM settings
     "llm_provider": "openai",
     "deep_think_llm": "gpt-5.5",

@@ -60,9 +60,12 @@ class TickerSymbolHandlingTests(unittest.TestCase):
         self.assertEqual(detect_instrument_type("BTC-USD"), InstrumentType.CRYPTO)
 
     def test_unknown_bare_six_digit_code_is_not_guessed(self):
+        # 900001（沪市 B 股）不属于任何场内基金/A 股股票段位：保持裸码、不
+        # 武断加交易所后缀，并按 OTC 基金候选处理——由缓存数据层（天天基金）
+        # 确认或拒绝，绝不会被当成 A 股股票或加后缀猜测市场。
         self.assertEqual(normalize_ticker_symbol("900001"), "900001")
-        self.assertEqual(detect_market_type("900001"), MarketType.OTHER)
-        self.assertEqual(detect_instrument_type("900001"), InstrumentType.UNKNOWN)
+        self.assertEqual(detect_market_type("900001"), MarketType.CN_FUND)
+        self.assertEqual(detect_instrument_type("900001"), InstrumentType.FUND)
 
     def test_build_instrument_context_mentions_exact_symbol(self):
         context = build_instrument_context("7203.T")

@@ -1,6 +1,8 @@
 from contextlib import suppress
 from unittest.mock import MagicMock
 
+import pytest
+
 import tradingagents.default_config as default_config
 from tradingagents.dataflows.config import get_config, set_config
 from tradingagents.graph.trading_graph import TradingAgentsGraph
@@ -51,6 +53,7 @@ def test_propagate_normalizes_cn_a_ticker_before_running_graph():
         "510300.SH",
         "2026-01-03",
         asset_type="stock",
+        checkpoint_args={},
     )
 
 
@@ -70,6 +73,7 @@ def test_propagate_preserves_cn_otc_fund_code_before_running_graph():
         "012920",
         "2026-06-04",
         asset_type="stock",
+        checkpoint_args={},
     )
 
 
@@ -82,7 +86,7 @@ def test_propagate_defaults_cn_a_runtime_vendors_to_akshare_without_leaking_conf
     graph._checkpointer_ctx = None
     graph._resolve_pending_entries = MagicMock()
 
-    def fake_run_graph(company_name, trade_date, asset_type="stock"):
+    def fake_run_graph(company_name, trade_date, asset_type="stock", checkpoint_args=None):
         observed_configs.append(get_config())
         return ("state", "decision")
 
@@ -104,7 +108,7 @@ def test_propagate_defaults_cn_otc_fund_runtime_vendors_to_akshare_without_leaki
     graph._checkpointer_ctx = None
     graph._resolve_pending_entries = MagicMock()
 
-    def fake_run_graph(company_name, trade_date, asset_type="stock"):
+    def fake_run_graph(company_name, trade_date, asset_type="stock", checkpoint_args=None):
         observed_configs.append(get_config())
         return ("state", "decision")
 
@@ -115,6 +119,45 @@ def test_propagate_defaults_cn_otc_fund_runtime_vendors_to_akshare_without_leaki
     assert result == ("state", "decision")
     assert observed_configs[0]["data_vendors"] == _expected_china_runtime_data_vendors()
     assert get_config()["data_vendors"] == default_config.DEFAULT_CONFIG["data_vendors"]
+
+
+def test_runtime_config_rejects_unsupported_tool_vendor_for_cn_ticker():
+    """R8 — an explicit tool_vendors override that only names vendors unsupported
+    for a China ticker fails with a clear message (market + supported vendors),
+    not a bare "No compatible vendor" deep inside route_to_vendor."""
+    graph = object.__new__(TradingAgentsGraph)
+    graph.config = {
+        **default_config.DEFAULT_CONFIG,
+        "tool_vendors": {"get_stock_data": "alpha_vantage"},
+    }
+
+    with pytest.raises(ValueError, match="alpha_vantage"):
+        graph._get_runtime_dataflow_config("510300")
+
+    with pytest.raises(ValueError, match="cn_a ticker '510300'"):
+        graph._get_runtime_dataflow_config("510300")
+
+    with pytest.raises(ValueError, match="akshare"):
+        graph._get_runtime_dataflow_config("510300")
+
+
+def test_runtime_config_allows_supported_or_partial_tool_vendor_for_cn_ticker():
+    graph = object.__new__(TradingAgentsGraph)
+    for chain in ("akshare", "akshare,yfinance"):
+        graph.config = {
+            **default_config.DEFAULT_CONFIG,
+            "tool_vendors": {"get_stock_data": chain},
+        }
+        # No raise; the interface filters the chain to the supported vendor.
+        graph._get_runtime_dataflow_config("510300")
+
+    # Non-China tickers are not subject to the check.
+    graph.config = {
+        **default_config.DEFAULT_CONFIG,
+        "tool_vendors": {"get_stock_data": "alpha_vantage"},
+    }
+    graph._get_runtime_dataflow_config("AAPL")
+
 
 
 def test_initial_state_resolves_display_name_for_cn_otc_fund(monkeypatch):

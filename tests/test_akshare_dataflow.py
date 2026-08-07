@@ -251,6 +251,26 @@ def test_get_stock_contract_marks_cn_otc_fund_as_nav(monkeypatch):
     assert result.rows == 3
 
 
+def test_newly_recognized_otc_fund_codes_route_to_nav(monkeypatch):
+    """R1 — 005827 / 110011 are now OTC funds and must go through the Tiantian
+    NAV path (semantic='nav'), never the equity/ETF OHLCV sources."""
+    monkeypatch.setattr(akshare, "_ak", lambda: (_ for _ in ()).throw(AssertionError("_ak should not be called")))
+    monkeypatch.setattr(akshare, "get_fund_nav_history", lambda symbol, start, end: _nav_frame())
+
+    for code in ("005827", "110011"):
+        result = akshare.get_stock_result(code, "2026-01-01", "2026-01-03")
+        assert result.ok is True, f"{code} should resolve via Tiantian NAV"
+        assert result.meta.semantic == "nav"
+        assert result.meta.source == "tiantian_fund_nav"
+        assert result.meta.symbol == code
+
+        rendered = akshare.get_stock(code, "2026-01-01", "2026-01-03")
+        checks = parse_contract_gate_status(rendered)
+        assert checks[0]["semantic"] == "nav"
+        assert checks[0]["warnings"] == ["nav_semantic"]
+
+
+
 def test_get_stock_contract_records_schema_drift_before_fallback(monkeypatch):
     class FakeAkShareWithDriftedEastmoney(FakeAkShare):
         def stock_zh_a_hist(self, **kwargs):
@@ -1143,6 +1163,113 @@ def test_akshare_get_display_name_cached(monkeypatch, tmp_path):
     # 缓存测试：第二次调用股票应该直接从缓存返回
     assert akshare.get_ticker_display_name("600519") == "贵州茅台"
     assert len(fake.calls) == 2
+
+
+def test_get_insider_transactions_returns_real_rows(monkeypatch):
+    class FakeInsiderAkShare:
+        def stock_hold_management_detail_em(self, symbol):
+            return pd.DataFrame(
+                [
+                    {"变动人姓名": "张三", "职务": "董事", "变动日期": "2026-01-05",
+                     "变动数量": 10000, "变动后持股数": 50000},
+                ]
+            )
+
+    fake = FakeInsiderAkShare()
+    monkeypatch.setattr(akshare, "_ak", lambda: fake)
+
+    result = akshare.get_insider_transactions("600519")
+
+    assert "AkShare Insider Transactions" in result
+    assert "张三" in result
+    assert "not available in a stable MVP format" not in result
+
+
+def test_get_insider_transactions_no_rows_is_explicit_no_data(monkeypatch):
+    class FakeEmptyInsiderAkShare:
+        def stock_hold_management_detail_em(self, symbol):
+            return pd.DataFrame()
+
+    fake = FakeEmptyInsiderAkShare()
+    monkeypatch.setattr(akshare, "_ak", lambda: fake)
+
+    result = akshare.get_insider_transactions("600519")
+
+    assert "No AkShare insider transaction rows" in result
+    assert "Do not fabricate" in result
+
+
+def test_get_insider_transactions_not_applicable_for_fund():
+    result = akshare.get_insider_transactions("510300")
+    assert "not applicable" in result
+
+
+def test_ticker_display_name_force_refresh_bypasses_cache(monkeypatch, tmp_path):
+    from tradingagents.dataflows import akshare
+
+    temp_cache = Cache(str(tmp_path / "test_display_force_cache"))
+    dataflow_cache.set_disk_cache("akshare", temp_cache)
+
+    fetch_count = {"n": 0}
+
+    class FakeOverviewAkShare:
+        def fund_overview_em(self, symbol):
+            fetch_count["n"] += 1
+            return pd.DataFrame([{"项目": "基金简称", "内容": f"简称-{fetch_count['n']}"}])
+
+    fake = FakeOverviewAkShare()
+    monkeypatch.setattr(akshare, "_ak", lambda: fake)
+
+    # 首次调用抓取并缓存；第二次命中缓存不再抓取。
+    assert akshare.get_ticker_display_name("510300") == "简称-1"
+    assert akshare.get_ticker_display_name("510300") == "简称-1"
+    assert fetch_count["n"] == 1
+
+    # force_refresh 绕过磁盘缓存重新抓取。
+    assert akshare.get_ticker_display_name("510300", force_refresh=True) == "简称-2"
+    assert fetch_count["n"] == 2
+
+
+@pytest.mark.parametrize("ticker", ["510300", "012920"])
+def test_window_fallback_is_warning_and_renders_warn(monkeypatch, tmp_path, ticker):
+    """R3c — window-fallback fund announcements surface as WARN in the Data
+    Reliability render (not a silent info-level notice), for both listed-fund
+    and OTC-fund announcement paths."""
+    from tradingagents.dataflows.contracts import (
+        build_data_contract_status,
+        parse_contract_gate_status,
+        render_data_contract_status,
+    )
+
+    temp_cache = Cache(str(tmp_path / "test_window_fallback_cache"))
+    dataflow_cache.set_disk_cache("akshare", temp_cache)
+
+    class FakeFallbackAkShare:
+        def fund_announcement_report_em(self, symbol):
+            # 只有窗口外的公告（2025-12-31，早于 start_date 2026-01-01）
+            return pd.DataFrame(
+                [{"公告标题": "窗口外公告", "公告日期": "2025-12-31", "公告链接": "https://example.invalid/x"}]
+            )
+
+        def fund_announcement_dividend_em(self, symbol):
+            return pd.DataFrame()
+
+        def fund_announcement_personnel_em(self, symbol):
+            return pd.DataFrame()
+
+    fake = FakeFallbackAkShare()
+    monkeypatch.setattr(akshare, "_ak", lambda: fake)
+
+    result = akshare.get_news(ticker, "2026-01-01", "2026-01-03")
+
+    assert "none found from 2026-01-01 to 2026-01-03" in result
+    assert "WARNING window_fallback" in result
+
+    checks = parse_contract_gate_status(result)
+    assert checks and "window_fallback" in checks[0]["warnings"]
+    rendered = render_data_contract_status(build_data_contract_status(checks))
+    assert "WARN" in rendered
+    assert "window_fallback" in rendered
 
 
 def test_akshare_disk_cache_disabled_by_config(tmp_path, monkeypatch):

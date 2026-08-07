@@ -176,6 +176,12 @@ def test_analyze_command_defaults_china_fund_tickers_to_akshare_without_mutating
         def process_signal(self, final_trade_decision):
             return "HOLD"
 
+        def enter_checkpoint_stream(self, ticker, analysis_date, *, asset_type):
+            return {}
+
+        def exit_checkpoint_stream(self):
+            return None
+
     class NoopLive:
         def __init__(self, *args, **kwargs):
             pass

@@ -53,6 +53,28 @@ def clear_disk_cache(namespace: str | None = None) -> None:
         _close_cache(cache_obj)
 
 
+def invalidate_disk_cache_where(namespace: str, predicate) -> int:
+    """Delete cached entries whose key satisfies ``predicate(key)``.
+
+    Returns the number of entries removed. Used for targeted refresh (e.g.
+    forcing a display-name re-fetch without dropping the whole namespace).
+    Safe when the cache is disabled or unavailable: it is a no-op returning 0.
+    """
+    _validate_namespace(namespace)
+    active_cache = get_disk_cache(namespace)
+    if active_cache is None:
+        return 0
+    removed = 0
+    for key in list(active_cache):
+        if isinstance(key, str) and predicate(key):
+            try:
+                del active_cache[key]
+                removed += 1
+            except KeyError:
+                pass
+    return removed
+
+
 def get_cache_stats(namespace: str | None = None) -> dict:
     """Return in-process cache counters for diagnostics and tests."""
     if namespace is not None:

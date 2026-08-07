@@ -257,9 +257,34 @@ class TradingAgentsGraph:
         return benchmark_map.get("", "SPY")
 
     def _get_runtime_dataflow_config(self, ticker: str) -> dict[str, Any]:
-        """Resolve per-run vendor defaults without mutating the instance config."""
-        if detect_market_type(ticker) not in (MarketType.CN_A, MarketType.CN_FUND):
+        """Resolve per-run vendor defaults without mutating the instance config.
+
+        Also validates explicit tool-level vendor overrides against the market
+        before the run: a China ticker with a tool_vendors override that only
+        names unsupported vendors would otherwise fail deep inside
+        ``route_to_vendor`` with a bare "No compatible vendor" that doesn't say
+        why (R8).
+        """
+        market_type = detect_market_type(ticker)
+        if market_type not in (MarketType.CN_A, MarketType.CN_FUND):
             return self.config
+
+        from tradingagents.dataflows.interface import MARKET_VENDOR_SUPPORT
+
+        supported = MARKET_VENDOR_SUPPORT[market_type]
+        tool_vendors = self.config.get("tool_vendors") or {}
+        for method, vendor_chain in tool_vendors.items():
+            configured = [
+                v.strip() for v in str(vendor_chain).split(",")
+                if v.strip() and v != "default"
+            ]
+            if configured and not any(v in supported for v in configured):
+                raise ValueError(
+                    f"tool_vendors['{method}']={vendor_chain!r} does not support "
+                    f"{market_type.value} ticker '{ticker}'. Supported vendor(s): "
+                    f"{', '.join(sorted(supported))}. Remove the override or use a "
+                    "supported vendor for China tickers."
+                )
 
         runtime_config = deepcopy(self.config)
         runtime_data_vendors = runtime_config.setdefault("data_vendors", {})
@@ -492,36 +517,64 @@ class TradingAgentsGraph:
         # Resolve any pending memory-log entries for this ticker before the pipeline runs.
         self._resolve_pending_entries(company_name)
 
-        # Recompile with a checkpointer if the user opted in.
-        if self.config.get("checkpoint_enabled"):
-            self._checkpointer_ctx = get_checkpointer(
-                self.config["data_cache_dir"], company_name
-            )
-            saver = self._checkpointer_ctx.__enter__()
-            self.graph = self.workflow.compile(checkpointer=saver)
-
-            step = checkpoint_step(
-                self.config["data_cache_dir"], company_name, str(trade_date),
-                self._run_signature(asset_type),
-            )
-            if step is not None:
-                logger.info(
-                    "Resuming from step %d for %s on %s", step, company_name, trade_date
-                )
-            else:
-                logger.info("Starting fresh for %s on %s", company_name, trade_date)
-
         original_dataflow_config = get_config()
-        set_config(self._get_runtime_dataflow_config(company_name))
-
+        checkpoint_args = {}
         try:
-            return self._run_graph(company_name, trade_date, asset_type=asset_type)
+            set_config(self._get_runtime_dataflow_config(company_name))
+            # Recompile with a per-ticker SqliteSaver when the user opted in.
+            checkpoint_args = self.enter_checkpoint_stream(
+                company_name, trade_date, asset_type=asset_type
+            )
+            return self._run_graph(
+                company_name, trade_date, asset_type=asset_type,
+                checkpoint_args=checkpoint_args,
+            )
         finally:
             set_config(original_dataflow_config)
-            if self._checkpointer_ctx is not None:
-                self._checkpointer_ctx.__exit__(None, None, None)
-                self._checkpointer_ctx = None
-                self.graph = self.workflow.compile()
+            self.exit_checkpoint_stream()
+
+    def enter_checkpoint_stream(
+        self, company_name, trade_date, asset_type: str = "stock",
+    ) -> dict[str, Any]:
+        """Compile against a per-ticker SqliteSaver when checkpointing is on.
+
+        Returns graph args carrying the deterministic ``thread_id`` (an empty
+        dict when checkpointing is disabled), so a run on the same
+        ticker + date + graph shape resumes from the last completed node while
+        anything else starts fresh (#1089). Shared by ``propagate()`` and the
+        CLI stream path so ``--checkpoint`` behaves identically everywhere.
+        Pair with :meth:`exit_checkpoint_stream`.
+        """
+        checkpoint_args: dict[str, Any] = {}
+        if not self.config.get("checkpoint_enabled"):
+            return checkpoint_args
+
+        self._checkpointer_ctx = get_checkpointer(
+            self.config["data_cache_dir"], company_name
+        )
+        saver = self._checkpointer_ctx.__enter__()
+        self.graph = self.workflow.compile(checkpointer=saver)
+
+        step = checkpoint_step(
+            self.config["data_cache_dir"], company_name, str(trade_date),
+            self._run_signature(asset_type),
+        )
+        if step is not None:
+            logger.info(
+                "Resuming from step %d for %s on %s", step, company_name, trade_date
+            )
+        else:
+            logger.info("Starting fresh for %s on %s", company_name, trade_date)
+
+        tid = thread_id(company_name, str(trade_date), self._run_signature(asset_type))
+        return {"config": {"configurable": {"thread_id": tid}}}
+
+    def exit_checkpoint_stream(self) -> None:
+        """Close the per-ticker saver and recompile without a checkpointer."""
+        if self._checkpointer_ctx is not None:
+            self._checkpointer_ctx.__exit__(None, None, None)
+            self._checkpointer_ctx = None
+            self.graph = self.workflow.compile()
 
     def save_reports(self, final_state, ticker, save_path=None) -> Path:
         """Write the markdown report tree for a completed run, like the CLI does.
@@ -538,7 +591,7 @@ class TradingAgentsGraph:
             )
         return write_report_tree(final_state, ticker, save_path)
 
-    def _run_graph(self, company_name, trade_date, asset_type: str = "stock"):
+    def _run_graph(self, company_name, trade_date, asset_type: str = "stock", checkpoint_args=None):
         """Execute the graph and write the resulting state to disk and memory log."""
         # Initialize state — inject memory log context for PM and the
         # deterministically resolved instrument identity for all agents.
@@ -554,10 +607,12 @@ class TradingAgentsGraph:
         args = self.propagator.get_graph_args()
 
         # Inject thread_id so same ticker+date+graph-shape resumes; a different
-        # date or graph shape starts fresh (#1089).
-        if self.config.get("checkpoint_enabled"):
-            tid = thread_id(company_name, str(trade_date), self._run_signature(asset_type))
-            args.setdefault("config", {}).setdefault("configurable", {})["thread_id"] = tid
+        # date or graph shape starts fresh (#1089). checkpoint_args comes from
+        # enter_checkpoint_stream() on both the propagate() and CLI paths.
+        if checkpoint_args:
+            args.setdefault("config", {}).setdefault("configurable", {}).update(
+                checkpoint_args["config"]["configurable"]
+            )
 
         if self.debug:
             trace = []

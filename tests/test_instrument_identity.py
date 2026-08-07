@@ -13,6 +13,59 @@ from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     resolve_instrument_identity,
 )
+from tradingagents.dataflows.instruments import (
+    InstrumentType,
+    MarketType,
+    detect_instrument_type,
+    detect_market_type,
+    normalize_ticker_symbol,
+)
+
+
+@pytest.mark.unit
+class ChinaCodeClassificationTests(unittest.TestCase):
+    """R1 — six-digit China code classification is segment-accurate.
+
+    Exchange-listed funds (``5``/``159``/``16``/``18`` prefixes) and equities
+    (precise SH/SZ/BJ segments) get their exchange suffix; every remaining
+    six-digit code is an OTC-fund candidate kept bare. Regression cases:
+    ``005827`` (starts with ``0`` but outside the SZ equity segments) and
+    ``110011`` (outside every listed segment) were previously misclassified as
+    ``.SZ`` equity / ``OTHER`` respectively.
+    """
+
+    def assert_classified(self, raw, market, instrument, normalized):
+        self.assertEqual(normalize_ticker_symbol(raw), normalized)
+        self.assertEqual(detect_market_type(raw), market)
+        self.assertEqual(detect_instrument_type(raw), instrument)
+
+    def test_otc_fund_codes_that_collide_with_equity_prefixes(self):
+        self.assert_classified("005827", MarketType.CN_FUND, InstrumentType.FUND, "005827")
+        self.assert_classified("110011", MarketType.CN_FUND, InstrumentType.FUND, "110011")
+
+    def test_recognized_otc_fund_codes(self):
+        self.assert_classified("012920", MarketType.CN_FUND, InstrumentType.FUND, "012920")
+
+    def test_listed_funds(self):
+        self.assert_classified("510300", MarketType.CN_A, InstrumentType.FUND, "510300.SH")
+        self.assert_classified("161725", MarketType.CN_A, InstrumentType.FUND, "161725.SZ")
+        self.assert_classified("159915", MarketType.CN_A, InstrumentType.FUND, "159915.SZ")
+
+    def test_a_share_equities(self):
+        self.assert_classified("000001", MarketType.CN_A, InstrumentType.EQUITY, "000001.SZ")
+        self.assert_classified("600519", MarketType.CN_A, InstrumentType.EQUITY, "600519.SH")
+        self.assert_classified("300750", MarketType.CN_A, InstrumentType.EQUITY, "300750.SZ")
+        self.assert_classified("830833", MarketType.CN_A, InstrumentType.EQUITY, "830833.BJ")
+        self.assert_classified("920002", MarketType.CN_A, InstrumentType.EQUITY, "920002.BJ")
+        self.assert_classified("430047", MarketType.CN_A, InstrumentType.EQUITY, "430047.BJ")
+
+    def test_explicit_suffix_is_respected(self):
+        self.assert_classified("600519.SH", MarketType.CN_A, InstrumentType.EQUITY, "600519.SH")
+
+    def test_non_cn_symbols_unchanged(self):
+        self.assert_classified("AAPL", MarketType.US, InstrumentType.EQUITY, "AAPL")
+        self.assert_classified("0700.HK", MarketType.HK, InstrumentType.EQUITY, "0700.HK")
+        self.assert_classified("BTC-USD", MarketType.CRYPTO, InstrumentType.CRYPTO, "BTC-USD")
 
 
 @pytest.mark.unit

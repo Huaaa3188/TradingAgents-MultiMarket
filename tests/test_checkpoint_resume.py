@@ -214,5 +214,105 @@ class TestCheckpointSignature(unittest.TestCase):
         self.assertEqual(base, g._run_signature("stock"))
 
 
+class TestGraphCheckpointStream(unittest.TestCase):
+    """R2 — TradingAgentsGraph.enter_checkpoint_stream() assembles the same
+    per-ticker SqliteSaver + deterministic thread_id on the CLI stream path as
+    propagate() does, so a crashed run resumes from the last completed node on
+    the same ticker+date (and a different graph shape starts fresh)."""
+
+    def setUp(self):
+        from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+        self.tmpdir = tempfile.mkdtemp()
+        self.graph = object.__new__(TradingAgentsGraph)
+        self.graph.config = {
+            "checkpoint_enabled": True,
+            "data_cache_dir": self.tmpdir,
+            "max_debate_rounds": 1,
+            "max_risk_discuss_rounds": 1,
+        }
+        self.graph.selected_analysts = ("market",)
+        self.graph._checkpointer_ctx = None
+        self.graph.workflow = _build_graph()
+
+    def test_enter_checkpoint_stream_compiles_saver_and_resumes(self):
+        global _should_crash
+        ticker, date = "TEST", "2026-04-20"
+        signature = self.graph._run_signature("stock")
+
+        cfg = self.graph.enter_checkpoint_stream(ticker, date)
+        self.assertIn("configurable", cfg["config"])
+        tid = cfg["config"]["configurable"]["thread_id"]
+        self.assertEqual(tid, thread_id(ticker, date, signature))
+
+        # Run 1: crash at the trader node.
+        _should_crash = True
+        with self.assertRaises(RuntimeError):
+            self.graph.graph.invoke({"count": 0}, **cfg)
+        self.graph.exit_checkpoint_stream()
+
+        self.assertEqual(checkpoint_step(self.tmpdir, ticker, date, signature), 1)
+
+        # Run 2: resume — same deterministic thread id, continues from step 1.
+        _should_crash = False
+        cfg2 = self.graph.enter_checkpoint_stream(ticker, date)
+        self.assertEqual(cfg2["config"]["configurable"]["thread_id"], tid)
+        result = self.graph.graph.invoke(None, **cfg2)
+        self.assertEqual(result["count"], 11)  # analyst +1 then trader +10
+        self.graph.exit_checkpoint_stream()
+
+    def test_crash_resume_sequence_is_repeatable(self):
+        """The crash→resume cycle succeeds consistently on repeated runs."""
+        global _should_crash
+        ticker, date = "TEST", "2026-04-21"
+        signature = self.graph._run_signature("stock")
+
+        for _ in range(2):
+            cfg = self.graph.enter_checkpoint_stream(ticker, date)
+            _should_crash = True
+            with self.assertRaises(RuntimeError):
+                self.graph.graph.invoke({"count": 0}, **cfg)
+            self.graph.exit_checkpoint_stream()
+            self.assertEqual(checkpoint_step(self.tmpdir, ticker, date, signature), 1)
+
+            _should_crash = False
+            cfg2 = self.graph.enter_checkpoint_stream(ticker, date)
+            result = self.graph.graph.invoke(None, **cfg2)
+            self.assertEqual(result["count"], 11)
+            self.graph.exit_checkpoint_stream()
+            # propagate() clears the checkpoint on successful completion; mimic it.
+            clear_checkpoint(self.tmpdir, ticker, date, signature)
+            self.assertIsNone(checkpoint_step(self.tmpdir, ticker, date, signature))
+
+    def test_different_graph_shape_starts_fresh(self):
+        global _should_crash
+        ticker, date = "TEST", "2026-04-22"
+
+        cfg = self.graph.enter_checkpoint_stream(ticker, date)
+        tid1 = cfg["config"]["configurable"]["thread_id"]
+        _should_crash = True
+        with self.assertRaises(RuntimeError):
+            self.graph.graph.invoke({"count": 0}, **cfg)
+        self.graph.exit_checkpoint_stream()
+        self.assertIsNotNone(checkpoint_step(self.tmpdir, ticker, date, self.graph._run_signature("stock")))
+
+        # Same ticker+date but a different analyst selection → different thread id.
+        self.graph.selected_analysts = ("market", "news")
+        cfg2 = self.graph.enter_checkpoint_stream(ticker, date)
+        self.assertNotEqual(cfg2["config"]["configurable"]["thread_id"], tid1)
+        _should_crash = False
+        # Fresh thread (no checkpoint for this signature) needs full input.
+        result = self.graph.graph.invoke({"count": 0}, **cfg2)
+        self.assertEqual(result["count"], 11)  # fresh run, not a resume
+        self.graph.exit_checkpoint_stream()
+
+    def test_checkpoint_disabled_returns_empty_args(self):
+        self.graph.config["checkpoint_enabled"] = False
+        cfg = self.graph.enter_checkpoint_stream("TEST", "2026-04-20")
+        self.assertEqual(cfg, {})
+        self.assertIsNone(self.graph._checkpointer_ctx)
+        self.graph.exit_checkpoint_stream()  # no-op
+
+
 if __name__ == "__main__":
     unittest.main()

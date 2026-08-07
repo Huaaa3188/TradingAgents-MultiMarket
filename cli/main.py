@@ -1117,6 +1117,15 @@ def run_analysis(
         callbacks=[stats_handler],
     )
 
+    # Recompile against a per-ticker SqliteSaver when checkpointing is on, so a
+    # crashed CLI run can resume on the same ticker+date (mirrors propagate()).
+    # exit_checkpoint_stream() is called after the Live block below.
+    checkpoint_args = graph.enter_checkpoint_stream(
+        selections["ticker"],
+        selections["analysis_date"],
+        asset_type=selections["asset_type"],
+    )
+
     # Initialize message buffer with selected analysts
     message_buffer.init_for_analysis(selected_analyst_keys)
 
@@ -1230,6 +1239,10 @@ def run_analysis(
         # Pass callbacks to graph config for tool execution tracking
         # (LLM tracking is handled separately via LLM constructor)
         args = graph.propagator.get_graph_args(callbacks=[stats_handler])
+        if checkpoint_args:
+            args.setdefault("config", {}).setdefault("configurable", {}).update(
+                checkpoint_args["config"]["configurable"]
+            )
 
         # Stream the analysis
         trace = []
@@ -1360,6 +1373,10 @@ def run_analysis(
                 message_buffer.update_report_section(section, final_state[section])
 
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
+
+    # Close the per-ticker checkpoint saver and recompile without a checkpointer
+    # so the next run (or a later propagate() call) starts from a clean graph.
+    graph.exit_checkpoint_stream()
 
     # Post-analysis prompts (outside Live context for clean interaction)
     console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")

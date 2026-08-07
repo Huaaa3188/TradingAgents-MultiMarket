@@ -119,6 +119,12 @@ def test_run_analysis_stream_saves_data_reliability_from_contract_gate(monkeypat
         def resolve_instrument_context(self, ticker, asset_type):
             return "instrument context"
 
+        def enter_checkpoint_stream(self, ticker, analysis_date, *, asset_type):
+            return {}
+
+        def exit_checkpoint_stream(self):
+            return None
+
     class NoopLive:
         def __init__(self, *args, **kwargs):
             pass

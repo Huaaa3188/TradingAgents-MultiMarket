@@ -7,9 +7,10 @@ from datetime import datetime
 import pandas as pd
 from stockstats import wrap
 
-from .cache import disk_cache, get_disk_cache
+from .cache import disk_cache, get_disk_cache, invalidate_disk_cache_where
 from .config import get_config
 from .contracts import (
+    ContractGateResult,
     DataNotice,
     DataResult,
     SourceMeta,
@@ -199,7 +200,37 @@ def _append_contract_gate(
         expected_semantic=result.meta.semantic,
         max_staleness_days=max_staleness_days,
     )
+    # Surface payload-level diagnostics (e.g. ``window_fallback``, fallback
+    # ``source_error``) on the contract gate as well, not just in the text-only
+    # Data Notices block, so they reach the parsed ``data_contract_status`` and
+    # the Data Reliability render (``render_data_contract_status``).
+    gate = _merge_result_notices_into_gate(gate)
     return text + "\n\n" + render_contract_gate(gate, "AkShare Data Contract Gate")
+
+
+def _merge_result_notices_into_gate(gate: ContractGateResult) -> ContractGateResult:
+    """Fold warning/error notices carried on the data result into the gate.
+
+    ``validate_data_result`` only emits diagnostics it infers itself (staleness,
+    schema drift, semantic mismatch). Payload-level notices a vendor attached to
+    a result (e.g. ``window_fallback``) are otherwise invisible to the parsed
+    ``data_contract_status``. Merge them in, de-duplicating by code.
+    """
+    warnings = list(gate.warnings)
+    failures = list(gate.failures)
+    known_codes = {notice.code for notice in (*warnings, *failures)}
+    for notice in gate.result.notices:
+        if notice.code in known_codes or notice.severity not in ("warning", "error"):
+            continue
+        (failures if notice.severity == "error" else warnings).append(notice)
+        known_codes.add(notice.code)
+    return ContractGateResult(
+        ok=not failures,
+        result=gate.result,
+        failures=tuple(failures),
+        warnings=tuple(warnings),
+        expected_semantic=gate.expected_semantic,
+    )
 
 
 def _date_window_days(start_date: str | None, end_date: str | None) -> int | None:
@@ -324,11 +355,16 @@ def get_income_statement(ticker: str, freq: str = "quarterly", curr_date: str | 
 @akshare_disk_cache(expire=14400)
 def get_news(ticker: str, start_date: str, end_date: str) -> str:
     result = _get_news_result(ticker, start_date, end_date)
+    has_window_fallback = any(n.code == "window_fallback" for n in result.notices)
     return _append_contract_gate(
         result.text or "",
         result,
         analysis_date=end_date,
-        max_staleness_days=_date_window_days(start_date, end_date),
+        # Window-fallback results are, by definition, older than the requested
+        # window: staleness would be a false alarm layered on top of the
+        # explicit window_fallback warning, so skip the staleness threshold
+        # and let the warning speak for itself.
+        max_staleness_days=None if has_window_fallback else _date_window_days(start_date, end_date),
     )
 
 
@@ -423,7 +459,7 @@ def _get_news_result(ticker: str, start_date: str, end_date: str) -> DataResult:
                             "using recent announcements before the end date."
                         ),
                         source="akshare_fund_announcements",
-                        severity="info",
+                        severity="warning",
                     )
                 )
             else:
@@ -553,10 +589,37 @@ def get_global_news(curr_date: str, look_back_days: int | None = None, limit: in
 
 
 def get_insider_transactions(ticker: str) -> str:
-    if detect_instrument_type(ticker) == InstrumentType.FUND:
-        normalized = normalize_ticker_symbol(ticker)
+    """Return China insider/ownership transaction rows for A-share tickers.
+
+    Uses AkShare's management-holdings-detail endpoint. The shared tool
+    signature carries no date, so the latest available rows are returned
+    without window filtering. Fails open with an explicit no-data result —
+    never a hardcoded stub — so the news analyst treats absent insider
+    activity as a lookup outcome rather than "not implemented".
+    """
+    normalized = normalize_ticker_symbol(ticker)
+    if detect_instrument_type(normalized) == InstrumentType.FUND:
         return f"Insider transaction data is not applicable to {_fund_label(normalized)} {normalized}."
-    return f"AkShare insider transaction data is not available in a stable MVP format for {normalize_ticker_symbol(ticker)}."
+    if detect_market_type(normalized) != MarketType.CN_A:
+        return (
+            f"AkShare insider transaction data is not available for {normalized}; "
+            "only mainland China A-share tickers are covered by this vendor."
+        )
+
+    ak = _ak()
+    symbol = to_akshare_symbol(normalized)
+    data = _safe_call(lambda: ak.stock_hold_management_detail_em(symbol=symbol))
+    if data is None or data.empty:
+        return (
+            f"No AkShare insider transaction rows were available for {normalized}. "
+            "Do not fabricate insider-activity figures."
+        )
+
+    header = (
+        f"# AkShare Insider Transactions (management holdings detail) for {normalized}\n"
+        f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    )
+    return header + data.to_csv(index=False)
 
 
 def _load_ohlcv(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -1420,8 +1483,14 @@ def _indicator_descriptions() -> dict[str, str]:
     }
 
 
-def get_ticker_display_name(ticker: str) -> str:
-    """Get verified Chinese display name (abbreviation or full name) for China instruments."""
+def get_ticker_display_name(ticker: str, force_refresh: bool = False) -> str:
+    """Get verified Chinese display name (abbreviation or full name) for China instruments.
+
+    ``force_refresh=True`` bypasses the on-disk cache so a rename is picked up
+    immediately instead of waiting out the TTL (7 days).
+    """
+    if force_refresh:
+        _invalidate_display_name_cache(ticker)
     normalized = normalize_ticker_symbol(ticker)
     market_type = detect_market_type(normalized)
     if market_type == MarketType.CN_FUND:
@@ -1431,7 +1500,19 @@ def get_ticker_display_name(ticker: str) -> str:
     return _get_cn_a_ticker_display_name(ticker, normalized)
 
 
-@akshare_disk_cache(expire=86400 * 30)  # 超长本地磁盘缓存 30 天，确保极速读取与 IP 安全
+def _invalidate_display_name_cache(ticker: str) -> None:
+    normalized = normalize_ticker_symbol(ticker)
+
+    def match(key: str) -> bool:
+        return (
+            key.startswith("disk:_get_cn_a_ticker_display_name:")
+            or key.startswith("disk:_get_cn_fund_display_name:")
+        ) and normalized in key
+
+    invalidate_disk_cache_where("akshare", match)
+
+
+@akshare_disk_cache(expire=86400 * 7)  # 7 天磁盘缓存；force_refresh 可立即刷新
 def _get_cn_a_ticker_display_name(ticker: str, normalized: str) -> str:
     code = to_akshare_symbol(normalized)
 
@@ -1458,7 +1539,7 @@ def _get_cn_a_ticker_display_name(ticker: str, normalized: str) -> str:
     return ticker
 
 
-@akshare_disk_cache(expire=86400 * 30)
+@akshare_disk_cache(expire=86400 * 7)  # 7 天磁盘缓存；force_refresh 可立即刷新
 def _get_cn_fund_display_name(ticker: str, normalized: str) -> str:
     code = to_akshare_symbol(normalized)
     for table in _safe_tiantian_fund_tables(code, None):

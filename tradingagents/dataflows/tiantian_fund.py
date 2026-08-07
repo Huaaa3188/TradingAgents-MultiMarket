@@ -38,6 +38,24 @@ def get_fund_profile_tables_result(
     try:
         tables = get_fund_profile_tables(code, curr_date, holdings_limit)
     except TiantianFundDataError as exc:
+        drifted = _detect_page_drift(code)
+        notice = (
+            data_notice(
+                "js_schema_drift",
+                "The Tiantian pingzhongdata page no longer exposes the expected JS variables "
+                "(fS_name/fS_code/Data_netWorthTrend) — the site structure appears to have changed.",
+                source="eastmoney_pingzhongdata",
+                severity="error",
+            )
+            if drifted
+            else data_notice(
+                "source_error",
+                "Tiantian Fund profile data could not be loaded.",
+                source="eastmoney_pingzhongdata",
+                detail=str(exc),
+                severity="error",
+            )
+        )
         return DataResult(
             meta=SourceMeta(
                 vendor="tiantian_fund",
@@ -47,18 +65,10 @@ def get_fund_profile_tables_result(
                 retrieved_at=_now_timestamp(),
             ),
             payload=[],
-            notices=(
-                data_notice(
-                    "source_error",
-                    "Tiantian Fund profile data could not be loaded.",
-                    source="eastmoney_pingzhongdata",
-                    detail=str(exc),
-                    severity="error",
-                ),
-            ),
+            notices=(notice,),
             ok=False,
             missing_reason="no_profile_data",
-            error_type="source_error",
+            error_type="js_schema_drift" if drifted else "source_error",
         )
 
     return DataResult(
@@ -105,6 +115,24 @@ def get_fund_nav_history_result(
     try:
         data = get_fund_nav_history(code, start_date, end_date)
     except TiantianFundDataError as exc:
+        drifted = _detect_page_drift(code)
+        notice = (
+            data_notice(
+                "js_schema_drift",
+                "The Tiantian nav-trend page no longer exposes the expected JS variables "
+                "(fS_name/fS_code/Data_netWorthTrend) — the site structure appears to have changed.",
+                source="eastmoney_nav_trend",
+                severity="error",
+            )
+            if drifted
+            else data_notice(
+                "source_error",
+                "Tiantian Fund NAV history could not be loaded.",
+                source="eastmoney_nav_trend",
+                detail=str(exc),
+                severity="error",
+            )
+        )
         return DataResult(
             meta=SourceMeta(
                 vendor="tiantian_fund",
@@ -114,18 +142,10 @@ def get_fund_nav_history_result(
                 retrieved_at=_now_timestamp(),
             ),
             payload=pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"]),
-            notices=(
-                data_notice(
-                    "source_error",
-                    "Tiantian Fund NAV history could not be loaded.",
-                    source="eastmoney_nav_trend",
-                    detail=str(exc),
-                    severity="error",
-                ),
-            ),
+            notices=(notice,),
             ok=False,
             missing_reason="no_nav_data",
-            error_type="source_error",
+            error_type="js_schema_drift" if drifted else "source_error",
         )
 
     return DataResult(
@@ -157,6 +177,34 @@ def get_fund_nav_history(
     if data.empty:
         raise TiantianFundDataError(f"No Tiantian Fund NAV data returned for {code}")
     return data
+
+
+_NAV_REQUIRED_JS_VARS = ("fS_name", "fS_code", "Data_netWorthTrend")
+
+
+def _page_structure_drifted(script: str, required_vars: tuple[str, ...] = _NAV_REQUIRED_JS_VARS) -> bool:
+    """Heuristic for a redesign that renamed/removed expected JS variables.
+
+    Several of the variables the parser relies on being simultaneously absent
+    (not merely empty) is cheap evidence that the pingzhongdata page structure
+    changed, as opposed to an ordinary gap in one dataset. An unreadable page
+    counts as drifted too.
+    """
+    if not script or not script.strip():
+        return True
+    present = sum(
+        1 for var in required_vars if re.search(rf"\bvar\s+{re.escape(var)}\s*=", script)
+    )
+    return present < len(required_vars) - 1
+
+
+def _detect_page_drift(symbol: str) -> bool:
+    """Read the raw pingzhongdata page and report whether it is structurally drifted."""
+    try:
+        script = _http_get_text(DETAIL_URL.format(symbol=symbol))
+    except TiantianFundDataError:
+        return True
+    return _page_structure_drifted(script)
 
 
 def _http_get_text(url: str, params: dict[str, Any] | None = None) -> str:

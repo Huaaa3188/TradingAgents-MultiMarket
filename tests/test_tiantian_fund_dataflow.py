@@ -143,7 +143,9 @@ def test_tiantian_fund_profile_rejects_empty_detail_contract(monkeypatch):
         tiantian_fund.get_fund_profile_tables("510300", "2026-05-22", holdings_limit=2)
 
 
-def test_tiantian_fund_profile_result_reports_source_error(monkeypatch):
+def test_tiantian_fund_profile_result_reports_js_schema_drift(monkeypatch):
+    """R7 — a page missing the required JS variables reports js_schema_drift,
+    not a generic source_error (site redesign is distinguishable from a data gap)."""
     def fake_get(url, params=None, **kwargs):
         if "pingzhongdata" in url:
             return FakeResponse("var unrelated_shape = {};")
@@ -155,9 +157,45 @@ def test_tiantian_fund_profile_result_reports_source_error(monkeypatch):
 
     assert result.ok is False
     assert result.meta.semantic == "fund_profile"
-    assert result.error_type == "source_error"
+    assert result.error_type == "js_schema_drift"
     assert result.missing_reason == "no_profile_data"
-    assert any(notice.code == "source_error" for notice in result.notices)
+    assert any(notice.code == "js_schema_drift" for notice in result.notices)
+
+
+def test_tiantian_fund_nav_result_reports_js_schema_drift(monkeypatch):
+    """R7 — NAV lookup on a structurally drifted page carries js_schema_drift."""
+    def fake_get(url, params=None, **kwargs):
+        return FakeResponse('var fS_name = "仅剩一个必需变量";')
+
+    monkeypatch.setattr(tiantian_fund.requests, "get", fake_get)
+
+    result = tiantian_fund.get_fund_nav_history_result("012920", "2026-05-21", "2026-05-22")
+
+    assert result.ok is False
+    assert result.error_type == "js_schema_drift"
+    assert result.missing_reason == "no_nav_data"
+    assert any(notice.code == "js_schema_drift" for notice in result.notices)
+
+
+def test_tiantian_fund_nav_result_intact_page_has_no_drift_notice(monkeypatch):
+    """R7 — an intact page succeeds and carries no js_schema_drift notice."""
+    def fake_get(url, params=None, **kwargs):
+        return FakeResponse(_detail_script())
+
+    monkeypatch.setattr(tiantian_fund.requests, "get", fake_get)
+
+    result = tiantian_fund.get_fund_nav_history_result("012920", "2026-05-21", "2026-05-22")
+
+    assert result.ok is True
+    assert result.rows == 2
+    assert not any(notice.code == "js_schema_drift" for notice in result.notices)
+
+
+def test_page_structure_drift_heuristic():
+    assert tiantian_fund._page_structure_drifted(_detail_script()) is False
+    assert tiantian_fund._page_structure_drifted('var fS_name = "x";') is True
+    assert tiantian_fund._page_structure_drifted("") is True
+    assert tiantian_fund._page_structure_drifted("   ") is True
 
 
 def test_tiantian_fund_profile_ignores_drifted_holdings_shape(monkeypatch):
