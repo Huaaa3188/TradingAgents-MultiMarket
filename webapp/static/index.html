@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TradingAgents | AI Intelligence Matrix</title>
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,700;1,400&family=Outfit:wght@300;400;600;700;900&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="dark-abyss">
+  <!-- Interactive Canvas Background -->
+  <canvas id="bg-canvas"></canvas>
+
+  <!-- Custom Glowing Magnetic Cursor -->
+  <div id="cursor-dot"></div>
+  <div id="cursor-follower"></div>
+
+  <!-- Ambient Light Orbs -->
+  <div class="ambient-orb orb-1"></div>
+  <div class="ambient-orb orb-2"></div>
+
+  <div class="app-shell">
+    <!-- Top Navigation Bar -->
+    <header class="topbar glass-header">
+      <div class="brand">
+        <div class="brand-logo">
+          <i data-lucide="cpu" class="logo-icon"></i>
+        </div>
+        <div class="brand-text">
+          <span class="title">TradingAgents</span>
+          <span class="subtitle">Multi-Agent Financial Quantum Intelligence Engine</span>
+        </div>
+      </div>
+      
+      <nav class="tabs glass-tabs">
+        <button id="tab-analyze" class="tab active" data-view="analyze">
+          <i data-lucide="activity" class="tab-icon"></i>
+          <span>分析控制台</span>
+        </button>
+        <button id="tab-reports" class="tab" data-view="reports">
+          <i data-lucide="archive" class="tab-icon"></i>
+          <span>历史报告库</span>
+        </button>
+      </nav>
+    </header>
+
+    <main class="main-content">
+      <!-- 分析视图 -->
+      <section id="view-analyze" class="view active">
+        <!-- 左侧配置表单面板 -->
+        <aside class="form-panel glass-panel">
+          <div class="panel-header">
+            <i data-lucide="sliders" class="panel-icon"></i>
+            <h2>运行配置</h2>
+          </div>
+
+          <form id="analyze-form" autocomplete="off">
+            <!-- 先锋科技感 Ticker 搜索门禁 -->
+            <div class="input-group cyber-ticker-group">
+              <div class="input-label-row">
+                <label for="ticker">
+                  <i data-lucide="scan-line" class="label-icon"></i> 目标代码 (Ticker Symbol)
+                </label>
+                <span class="hud-badge"><i data-lucide="zap"></i> REALTIME</span>
+              </div>
+              
+              <div class="cyber-input-container">
+                <div class="corner-hud top-left"></div>
+                <div class="corner-hud top-right"></div>
+                <div class="corner-hud bottom-left"></div>
+                <div class="corner-hud bottom-right"></div>
+                
+                <i data-lucide="search" class="ticker-search-icon"></i>
+                <input id="ticker" name="ticker" placeholder="输入代码如 600519 / 510300 / AAPL..." autocomplete="off" required spellcheck="false">
+                <div class="ticker-action-badge" id="ticker-status-badge">
+                  <i data-lucide="cpu"></i>
+                </div>
+              </div>
+
+              <!-- 智能资产识别徽章 -->
+              <div id="ticker-detect" class="detect-line-hud"></div>
+
+              <!-- 快捷热点 Ticker 芯片面板 -->
+              <div class="quick-tickers-row">
+                <span class="quick-label">热门预设:</span>
+                <button type="button" class="ticker-chip" data-symbol="600519">600519 贵州茅台</button>
+                <button type="button" class="ticker-chip" data-symbol="510300">510300 沪深300</button>
+                <button type="button" class="ticker-chip" data-symbol="AAPL">AAPL 苹果</button>
+                <button type="button" class="ticker-chip" data-symbol="BTC-USD">BTC 加密货币</button>
+              </div>
+            </div>
+
+            <!-- 分析日期 -->
+            <div class="input-group">
+              <label for="analysis-date">
+                <i data-lucide="calendar" class="label-icon"></i> 分析基准日期
+              </label>
+              <input id="analysis-date" name="analysis_date" type="date" required>
+            </div>
+
+            <!-- LLM Provider -->
+            <div class="input-group">
+              <label for="provider">
+                <i data-lucide="server" class="label-icon"></i> LLM Provider
+              </label>
+              <select id="provider" name="provider"></select>
+              <div id="provider-key-status" class="key-status"></div>
+            </div>
+
+            <!-- 模型选择双栏 -->
+            <div class="model-grid">
+              <div class="input-group">
+                <label for="deep-model">
+                  <i data-lucide="brain-circuit" class="label-icon"></i> 深度推理模型
+                </label>
+                <div id="deep-model-wrap"></div>
+              </div>
+              <div class="input-group">
+                <label for="quick-model">
+                  <i data-lucide="zap" class="label-icon"></i> 快速响应模型
+                </label>
+                <div id="quick-model-wrap"></div>
+              </div>
+            </div>
+
+            <!-- 分析师队伍勾选 -->
+            <fieldset class="analyst-fieldset glass-card">
+              <legend>
+                <i data-lucide="users" class="legend-icon"></i> 分析师团队配置
+              </legend>
+              <div class="checkbox-grid">
+                <label class="check-card">
+                  <input type="checkbox" name="analysts" value="market" checked>
+                  <span class="check-label"><i data-lucide="trending-up"></i> Market</span>
+                </label>
+                <label class="check-card">
+                  <input type="checkbox" name="analysts" value="social" checked>
+                  <span class="check-label"><i data-lucide="message-square"></i> Sentiment</span>
+                </label>
+                <label class="check-card">
+                  <input type="checkbox" name="analysts" value="news" checked>
+                  <span class="check-label"><i data-lucide="newspaper"></i> News</span>
+                </label>
+                <label class="check-card">
+                  <input type="checkbox" name="analysts" value="fundamentals" checked>
+                  <span class="check-label"><i data-lucide="pie-chart"></i> Fundamentals</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <!-- 轮数设置 -->
+            <div class="row">
+              <div class="input-group">
+                <label for="debate-rounds">
+                  <i data-lucide="swords" class="label-icon"></i> 多空辩论轮数
+                </label>
+                <input id="debate-rounds" name="max_debate_rounds" type="number" min="1" max="5">
+              </div>
+              <div class="input-group">
+                <label for="risk-rounds">
+                  <i data-lucide="shield-alert" class="label-icon"></i> 风险讨论轮数
+                </label>
+                <input id="risk-rounds" name="max_risk_discuss_rounds" type="number" min="1" max="5">
+              </div>
+            </div>
+
+            <!-- 语言与 Checkpoint -->
+            <div class="input-group">
+              <label for="output-language">
+                <i data-lucide="globe" class="label-icon"></i> 输出语言
+              </label>
+              <select id="output-language" name="output_language">
+                <option>English</option>
+                <option>Chinese</option>
+              </select>
+            </div>
+
+            <div class="input-group checkbox-single">
+              <label class="check-card single">
+                <input type="checkbox" id="checkpoint" name="checkpoint">
+                <span class="check-label">
+                  <i data-lucide="rotate-ccw"></i> 启用 Checkpoint 断点续跑
+                </span>
+              </label>
+            </div>
+
+            <button type="submit" id="start-btn" class="glow-button">
+              <i data-lucide="play" class="btn-icon"></i>
+              <span>启动量子投研分析</span>
+            </button>
+          </form>
+        </aside>
+
+        <!-- 右侧分析结果展示区 -->
+        <section class="results-panel">
+          <!-- 运行状态指示器 -->
+          <div id="run-status" class="run-status glass-card idle">
+            <div class="status-indicator">
+              <i data-lucide="circle-dashed" class="status-icon spin"></i>
+              <span class="status-text">等待配置并启动分析…</span>
+            </div>
+          </div>
+
+          <!-- Multi-Agent Live Flow Pipeline Visualizer -->
+          <div class="pipeline-visualizer glass-card">
+            <div class="pipeline-title">
+              <i data-lucide="git-merge"></i> Multi-Agent Live Workflow Matrix
+            </div>
+            <div class="pipeline-nodes" id="pipeline-nodes">
+              <div class="node-chip" data-node="market_report">
+                <i data-lucide="trending-up"></i> Market
+              </div>
+              <div class="node-chip" data-node="sentiment_report">
+                <i data-lucide="message-square"></i> Sentiment
+              </div>
+              <div class="node-chip" data-node="news_report">
+                <i data-lucide="newspaper"></i> News
+              </div>
+              <div class="node-chip" data-node="fundamentals_report">
+                <i data-lucide="pie-chart"></i> Fundamentals
+              </div>
+              <div class="node-connector"><i data-lucide="chevron-right"></i></div>
+              <div class="node-chip" data-node="debate">
+                <i data-lucide="swords"></i> Bull/Bear Debate
+              </div>
+              <div class="node-connector"><i data-lucide="chevron-right"></i></div>
+              <div class="node-chip" data-node="risk">
+                <i data-lucide="shield-alert"></i> Risk Manager
+              </div>
+              <div class="node-connector"><i data-lucide="chevron-right"></i></div>
+              <div class="node-chip" data-node="trader">
+                <i data-lucide="briefcase"></i> Trader
+              </div>
+              <div class="node-connector"><i data-lucide="chevron-right"></i></div>
+              <div class="node-chip" data-node="decision">
+                <i data-lucide="award"></i> Final Decision
+              </div>
+            </div>
+          </div>
+
+          <!-- 最终交易信号 Hero 卡片 -->
+          <div id="signal-card" class="signal-card hidden glass-hero-card"></div>
+
+          <!-- 数据可靠性评分卡片 -->
+          <div id="reliability-card" class="reliability-container"></div>
+
+          <!-- Agent 细分报告集 -->
+          <div id="sections" class="sections-accordion"></div>
+        </section>
+      </section>
+
+      <!-- 历史报告视图 -->
+      <section id="view-reports" class="view hidden">
+        <div class="reports-layout">
+          <aside class="reports-sidebar glass-panel">
+            <div class="sidebar-header">
+              <i data-lucide="folder-git-2"></i>
+              <h3>历史决策归档</h3>
+            </div>
+            <div id="reports-list" class="reports-list">
+              <p class="muted">加载中…</p>
+            </div>
+          </aside>
+          
+          <article class="report-viewer-container glass-panel">
+            <div id="report-viewer" class="report-viewer markdown">
+              <div class="empty-viewer">
+                <i data-lucide="file-search" class="empty-icon"></i>
+                <p class="muted">请从左侧选择一份归档报告以查看沉浸式分析结果。</p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

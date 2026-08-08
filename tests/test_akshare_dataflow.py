@@ -1272,6 +1272,84 @@ def test_window_fallback_is_warning_and_renders_warn(monkeypatch, tmp_path, tick
     assert "window_fallback" in rendered
 
 
+def test_mini_racer_prewarm_fails_open_when_unavailable():
+    """Neither mini_racer nor py_mini_racer installed → prewarm is a no-op."""
+    import sys
+    from unittest import mock
+
+    from tradingagents.dataflows import akshare
+
+    with mock.patch.dict(sys.modules, {"mini_racer": None, "py_mini_racer": None}):
+        akshare._prewarm_mini_racer()  # must not raise
+
+
+def test_mini_racer_prewarm_uses_mini_racer_first():
+    import sys
+    from unittest import mock
+
+    from tradingagents.dataflows import akshare
+
+    class FakeMiniRacer:
+        instances = []
+
+        def __init__(self):
+            self.evals = []
+            FakeMiniRacer.instances.append(self)
+
+        def eval(self, code):
+            self.evals.append(code)
+
+    fake_module = mock.Mock()
+    fake_module.MiniRacer = FakeMiniRacer
+    with mock.patch.dict(sys.modules, {"mini_racer": fake_module, "py_mini_racer": None}):
+        akshare._prewarm_mini_racer()
+
+    assert FakeMiniRacer.instances, "mini_racer should be instantiated"
+    assert FakeMiniRacer.instances[0].evals == ["1+1"]
+
+
+def test_mini_racer_prewarm_falls_back_to_py_mini_racer():
+    import sys
+    from unittest import mock
+
+    from tradingagents.dataflows import akshare
+
+    class FakeMiniRacer:
+        instances = []
+
+        def __init__(self):
+            self.evals = []
+            FakeMiniRacer.instances.append(self)
+
+        def eval(self, code):
+            self.evals.append(code)
+
+    fake_module = mock.Mock()
+    fake_module.MiniRacer = FakeMiniRacer
+    with mock.patch.dict(sys.modules, {"mini_racer": None, "py_mini_racer": fake_module}):
+        akshare._prewarm_mini_racer()
+
+    assert FakeMiniRacer.instances, "py_mini_racer should be instantiated as fallback"
+    assert FakeMiniRacer.instances[0].evals == ["1+1"]
+
+
+def test_mini_racer_prewarm_survives_mini_racer_constructor_failure():
+    """If the primary library is importable but its engine fails to start, the
+    fallback (and ultimately fail-open) paths must still be safe."""
+    import sys
+    from unittest import mock
+
+    from tradingagents.dataflows import akshare
+
+    def boom():
+        raise RuntimeError("engine failed to start")
+
+    broken_module = mock.Mock()
+    broken_module.MiniRacer = mock.Mock(side_effect=boom)
+    with mock.patch.dict(sys.modules, {"mini_racer": broken_module, "py_mini_racer": None}):
+        akshare._prewarm_mini_racer()  # must not raise
+
+
 def test_akshare_disk_cache_disabled_by_config(tmp_path, monkeypatch):
     from tradingagents.dataflows import akshare
     from tradingagents.dataflows.config import set_config

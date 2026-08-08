@@ -33,6 +33,30 @@ _MACRO_NEWS_TOTAL_BUDGET_SECONDS = 15
 _MACRO_NEWS_SOURCE_TIMEOUT_SECONDS = 12
 _MACRO_NEWS_SOURCE_COOLDOWN_SECONDS = 60 * 60
 _macro_news_source_health: dict[str, float] = {}
+
+
+def _prewarm_mini_racer() -> None:
+    """Pre-warm V8 engine (mini_racer / py_mini_racer) in a single-threaded context.
+
+    Prevents multi-threaded address_pool_manager.cc initialization race condition
+    C++ FATAL crashes when multiple agents execute concurrently. Runs once at
+    module import (Python's import lock makes this single-threaded by design);
+    fails open when neither library is installed.
+    """
+    try:
+        from mini_racer import MiniRacer
+        mr = MiniRacer()
+        mr.eval("1+1")
+    except Exception:
+        try:
+            from py_mini_racer import MiniRacer
+            mr = MiniRacer()
+            mr.eval("1+1")
+        except Exception:
+            pass
+
+
+_prewarm_mini_racer()
 _OHLCV_RENAME_MAP = {
     "日期": "Date",
     "开盘": "Open",
