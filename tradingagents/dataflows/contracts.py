@@ -361,6 +361,22 @@ def merge_data_contract_status(
     return build_data_contract_status(merged)
 
 
+def merge_contract_status_channel(left: Any, right: Any) -> Any:
+    """LangGraph channel reducer for the ``data_contract_status`` state field.
+
+    Merges an incoming status update into the accumulated channel value and
+    de-duplicates checks by content, so any node writing the field contributes
+    checks instead of last-write-wins silently erasing earlier gate results.
+    """
+    if not left:
+        return right
+    if not right:
+        return left
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return right
+    return merge_data_contract_status(left, right.get("checks") or [])
+
+
 def parse_contract_gate_status(text: str) -> list[dict[str, Any]]:
     """Parse rendered contract-gate Markdown back into compact status checks."""
     if not isinstance(text, str) or "Contract Gate" not in text:

@@ -9,6 +9,7 @@ from tradingagents.dataflows.contracts import (
     build_data_contract_status,
     collect_data_contract_status_from_messages,
     data_notice,
+    merge_contract_status_channel,
     merge_data_contract_status,
     parse_contract_gate_status,
     render_contract_gate,
@@ -167,6 +168,44 @@ def test_initial_graph_state_has_empty_data_contract_status():
     state = Propagator().create_initial_state("COF", "2026-05-22")
 
     assert state["data_contract_status"] == {"overall": "not_checked", "checks": []}
+
+
+@pytest.mark.unit
+def test_contract_status_channel_reducer_accumulates_checks():
+    left = build_data_contract_status(
+        [{"status": "pass", "source": "a", "symbol": "600519.SH", "semantic": "ohlcv"}]
+    )
+    right = build_data_contract_status(
+        [{"status": "fail", "source": "b", "symbol": "600519.SH", "semantic": "nav", "failures": ["no_rows"]}]
+    )
+
+    merged = merge_contract_status_channel(left, right)
+
+    assert len(merged["checks"]) == 2
+    assert merged["overall"] == "fail"
+
+
+@pytest.mark.unit
+def test_contract_status_channel_reducer_deduplicates_repeated_updates():
+    check = {"status": "pass", "source": "a", "symbol": "600519.SH", "semantic": "ohlcv"}
+    left = build_data_contract_status([check])
+    right = build_data_contract_status([check])
+
+    merged = merge_contract_status_channel(left, right)
+
+    assert len(merged["checks"]) == 1
+    assert merged["overall"] == "pass"
+
+
+@pytest.mark.unit
+def test_contract_status_channel_reducer_handles_missing_sides_and_non_dicts():
+    status = build_data_contract_status([])
+
+    assert merge_contract_status_channel(None, status) is status
+    assert merge_contract_status_channel(status, None) is status
+    assert merge_contract_status_channel(None, None) is None
+    # Defensive: a non-dict update replaces the channel rather than crashing.
+    assert merge_contract_status_channel(status, "not-a-dict") == "not-a-dict"
 
 
 @pytest.mark.unit

@@ -383,10 +383,9 @@ def create_msg_delete():
             )
         )
         updates = {"messages": removal_operations + [placeholder]}
-        contract_status = collect_data_contract_status_from_messages(
-            messages,
-            existing=state.get("data_contract_status"),
-        )
+        # Only the new checks collected from these tool messages; the state
+        # channel reducer accumulates them across nodes.
+        contract_status = collect_data_contract_status_from_messages(messages)
         if contract_status is not None:
             updates["data_contract_status"] = contract_status
         return updates

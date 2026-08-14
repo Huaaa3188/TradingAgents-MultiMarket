@@ -3,6 +3,8 @@ from typing import Annotated
 from langgraph.graph import MessagesState
 from typing_extensions import TypedDict
 
+from tradingagents.dataflows.contracts import merge_contract_status_channel
+
 
 # Researcher team state
 class InvestDebateState(TypedDict):
@@ -52,7 +54,9 @@ class AgentState(MessagesState):
     market_type: Annotated[str, "Market under analysis such as us, cn_a, hk, jp, or crypto"]
     instrument_context: Annotated[str, "Deterministic ticker identity resolved at run start"]
     trade_date: Annotated[str, "What date we are trading at"]
-    data_contract_status: Annotated[dict, "Data contract gate status collected from tool outputs"]
+    # Accumulated contract-gate checks: the channel reducer merges incoming
+    # status dicts by content, so nodes can never erase earlier gate history.
+    data_contract_status: Annotated[dict, merge_contract_status_channel]
 
     sender: Annotated[str, "Agent that sent this message"]
 
