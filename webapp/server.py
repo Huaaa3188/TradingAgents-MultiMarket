@@ -247,20 +247,17 @@ class _Handler(BaseHTTPRequestHandler):
     # -- SSE ---------------------------------------------------------------
 
     def _stream_events(self, run_id: str) -> None:
-        run = self.manager.get(run_id)
-        if run is None:
+        subscribed = self.manager.subscribe(run_id)
+        if subscribed is None:
             self._send_json({"error": "run not found"}, 404)
             return
+        subscriber, buffered = subscribed
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
-
-        # Replay events buffered so far (a reconnecting EventSource catches up).
-        with self.manager._lock:  # noqa: SLF001 - same package boundary
-            buffered = list(self.manager._runs[run_id]["events"]) if run_id in self.manager._runs else []
 
         def _write(event: dict[str, Any] | None) -> bool:
             if event is None:
@@ -272,12 +269,15 @@ class _Handler(BaseHTTPRequestHandler):
             return True
 
         try:
+            # Replay events buffered so far (a reconnecting EventSource catches
+            # up). Each client consumes its own queue, so concurrent viewers
+            # never steal events from one another.
             for event in buffered:
                 if not _write(event):
                     return
             while True:
                 try:
-                    event = self.manager._runs[run_id]["queue"].get(timeout=15)  # noqa: SLF001
+                    event = subscriber.get(timeout=15)
                 except queue.Empty:
                     self.wfile.write(b": ping\n\n")  # keep-alive comment
                     self.wfile.flush()
@@ -285,6 +285,7 @@ class _Handler(BaseHTTPRequestHandler):
                 if not _write(event):
                     return
         finally:
+            self.manager.unsubscribe(run_id, subscriber)
             with suppress(BrokenPipeError, ConnectionResetError):
                 self.wfile.flush()
 

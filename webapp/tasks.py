@@ -1,9 +1,9 @@
 """Background analysis manager for the web UI.
 
 Each analysis runs ``TradingAgentsGraph.graph.stream`` in a daemon thread and
-forwards the graph's per-node chunks to an event queue consumed by the SSE
-endpoint. The graph factory is injectable so tests can substitute a fake
-graph without touching the real LLM/data path.
+forwards the graph's per-node chunks to per-subscriber event queues consumed
+by the SSE endpoint. The graph factory is injectable so tests can substitute a
+fake graph without touching the real LLM/data path.
 
 Run lifecycle: ``pending`` -> ``running`` -> ``done`` | ``error``.
 Events pushed to the run's queue (replayed on SSE connect):
@@ -34,6 +34,7 @@ from cli.utils import (
     provider_default_url,
 )
 from tradingagents.dataflows.instruments import (
+    MarketType,
     detect_instrument_type,
     detect_market_type,
     normalize_ticker_symbol,
@@ -102,8 +103,15 @@ def build_graph_config(request: dict[str, Any]) -> dict[str, Any]:
         config["checkpoint_enabled"] = bool(request["checkpoint"])
 
     from cli.main import _apply_data_vendor_override
-    data_vendors = request.get("data_vendors") or "akshare,yfinance"
-    _apply_data_vendor_override(config, data_vendors)
+    data_vendors = request.get("data_vendors")
+    if not data_vendors:
+        # Market-aware default: China tickers get the akshare chain; other
+        # markets keep the yfinance defaults (no failing akshare first hop).
+        market_type = detect_market_type(request.get("ticker") or "")
+        if market_type in (MarketType.CN_A, MarketType.CN_FUND):
+            data_vendors = "akshare"
+    if data_vendors:
+        _apply_data_vendor_override(config, data_vendors)
 
     return config
 
@@ -156,7 +164,7 @@ class AnalysisManager:
             "ticker": ticker,
             "analysis_date": analysis_date,
             "events": [],            # replay buffer for late SSE connects
-            "queue": queue.Queue(),
+            "subscribers": [],       # per-SSE-client queues broadcast by _emit
             "signal": None,
             "report_path": None,
             "error": None,
@@ -171,16 +179,42 @@ class AnalysisManager:
         return run_id
 
     def get(self, run_id: str) -> dict[str, Any] | None:
-        """Return a snapshot of the run (without the queue)."""
+        """Return a snapshot of the run (without subscriber queues)."""
         with self._lock:
             run = self._runs.get(run_id)
             if run is None:
                 return None
-            return {key: value for key, value in run.items() if key != "queue"}
+            return {key: value for key, value in run.items() if key != "subscribers"}
+
+    def subscribe(self, run_id: str) -> tuple[queue.Queue, list[Any]] | None:
+        """Register a new SSE client; return (queue, replay snapshot).
+
+        Registration and snapshot happen under the same lock as ``_emit``, so
+        an event is never both missed (emitted between snapshot and subscribe)
+        and duplicated (emitted before the snapshot and re-pushed to the new
+        queue).
+        """
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                return None
+            subscriber: queue.Queue = queue.Queue()
+            run["subscribers"].append(subscriber)
+            snapshot = list(run["events"])
+        return subscriber, snapshot
+
+    def unsubscribe(self, run_id: str, subscriber: queue.Queue) -> None:
+        """Remove a disconnected SSE client's queue."""
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is not None and subscriber in run["subscribers"]:
+                run["subscribers"].remove(subscriber)
 
     def _emit(self, run: dict[str, Any], event: dict[str, Any] | None) -> None:
-        run["events"].append(event)
-        run["queue"].put(event)
+        with self._lock:
+            run["events"].append(event)
+            for subscriber in run["subscribers"]:
+                subscriber.put(event)
 
     def _execute(
         self, run_id: str, request: dict[str, Any], run: dict[str, Any]

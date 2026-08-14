@@ -337,7 +337,6 @@ async function onSubmit(ev) {
     max_risk_discuss_rounds: parseInt($("risk-rounds").value, 10) || 1,
     output_language: $("output-language").value,
     checkpoint: $("checkpoint").checked,
-    data_vendors: "akshare,yfinance",
     analysts: [...form.querySelectorAll('input[name="analysts"]:checked')].map((c) => c.value),
   };
 

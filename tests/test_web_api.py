@@ -112,6 +112,31 @@ def test_detect_classifies_cn_ticker(server):
     assert data["asset_type"] == "stock"
 
 
+def test_build_graph_config_chooses_market_aware_vendor_defaults():
+    from tradingagents.default_config import DEFAULT_CONFIG
+    from webapp.tasks import build_graph_config
+
+    # China tickers default to the akshare chain without an explicit request.
+    cn = build_graph_config({"ticker": "600519", "analysis_date": "2026-01-03"})
+    assert cn["data_vendors"]["core_stock_apis"] == "akshare"
+    assert cn["data_vendors"]["news_data"] == "akshare"
+
+    # China OTC fund codes follow the same rule.
+    cn_fund = build_graph_config({"ticker": "012920", "analysis_date": "2026-01-03"})
+    assert cn_fund["data_vendors"]["core_stock_apis"] == "akshare"
+
+    # Non-China tickers keep the untouched defaults (no akshare first hop).
+    us = build_graph_config({"ticker": "SPY", "analysis_date": "2026-01-03"})
+    assert us["data_vendors"] == DEFAULT_CONFIG["data_vendors"]
+    assert us["data_vendors"]["core_stock_apis"] == "yfinance"
+
+    # An explicit request always wins over the market-aware default.
+    explicit = build_graph_config(
+        {"ticker": "600519", "analysis_date": "2026-01-03", "data_vendors": "alpha_vantage"}
+    )
+    assert explicit["data_vendors"]["core_stock_apis"] == "alpha_vantage"
+
+
 def test_render_endpoint_escapes_html(server):
     status, data = _post(server, "/api/render", {"markdown": "<script>alert(1)</script> **bold**"})
     assert status == 200
@@ -159,6 +184,66 @@ def test_analyze_run_lifecycle_and_sse(server):
     # Chunks carry the report deltas.
     chunk = next(ev for ev in events if ev["type"] == "chunk")
     assert "market_report" in chunk["data"]
+
+
+def test_sse_broadcasts_to_every_subscriber(tmp_path):
+    """Two concurrent SSE clients must each receive the full post-subscribe stream."""
+    import queue as queue_mod
+    import time
+
+    from webapp.tasks import AnalysisManager
+
+    release = threading.Event()
+
+    def factory(selected_analysts, config, debug=False):
+        graph = _FakeGraph(selected_analysts, config, debug=debug)
+
+        def stream(init_state, **args):
+            yield {"market_report": "# Market"}
+            yield {"investment_debate_state": {"bull_history": "b", "judge_decision": "j"}}
+            release.wait(timeout=15)  # park the worker so both clients can attach
+            yield {"final_trade_decision": "## D\n\n**Rating**: BUY"}
+            yield {"data_contract_status": {"overall": "pass", "checks": []}}
+
+        graph.graph.stream = stream  # _execute drives graph.graph.stream()
+        return graph
+
+    manager = AnalysisManager(graph_factory=factory, results_dir=str(tmp_path))
+    run_id = manager.start({"ticker": "600519", "analysis_date": "2026-01-03"})
+
+    # Wait until the worker has emitted meta + both pre-park chunks, i.e. it is
+    # now parked on ``release`` and can emit nothing more until we release it.
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if len(manager.get(run_id)["events"]) >= 3:
+            break
+        time.sleep(0.05)
+    assert len(manager.get(run_id)["events"]) >= 3
+    assert manager.get(run_id)["status"] == "running"
+
+    sub1, snapshot1 = manager.subscribe(run_id)
+    sub2, snapshot2 = manager.subscribe(run_id)
+    assert snapshot1 == snapshot2  # both replay the same history
+    release.set()
+
+    def drain(subscriber):
+        events = []
+        while True:
+            try:
+                event = subscriber.get(timeout=10)
+            except queue_mod.Empty:
+                break
+            events.append(event)
+            if event is None:
+                break
+        return events
+
+    got1, got2 = drain(sub1), drain(sub2)
+    assert got1 == got2, "each subscriber must see the same post-subscribe events"
+    types = [event["type"] for event in got1 if event is not None]
+    assert "chunk" in types
+    assert "done" in types
+    assert got1[-1] is None  # end-of-stream sentinel reaches every subscriber
 
 
 def test_analyze_rejects_missing_fields(server):
