@@ -2,14 +2,12 @@
 condition derives from VendorError, so the router catches base types and any
 vendor slots in without new handling.
 """
-import copy
 import unittest
 from unittest import mock
 
 import pytest
 
 import tradingagents.dataflows.config as config_module
-import tradingagents.default_config as default_config
 from tradingagents.dataflows import interface
 from tradingagents.dataflows.alpha_vantage_common import (
     AlphaVantageNotConfiguredError,
@@ -52,10 +50,10 @@ class HierarchyTests(unittest.TestCase):
 @pytest.mark.unit
 class RouterHandlesBaseTypesTests(unittest.TestCase):
     def setUp(self):
-        config_module._config = copy.deepcopy(default_config.DEFAULT_CONFIG)
+        config_module.reset_config()
 
     def tearDown(self):
-        config_module._config = copy.deepcopy(default_config.DEFAULT_CONFIG)
+        config_module.reset_config()
 
     def test_rate_limit_subclass_caught_by_base(self):
         # A vendor-named rate-limit error skips to the next vendor in the chain.

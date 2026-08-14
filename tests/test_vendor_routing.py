@@ -5,14 +5,12 @@ Regressions for #988 (explicit single-vendor config still fell back to others),
 #289 (fallback ran for unchosen vendors), and #989 (serious primary failures
 were swallowed without a trace).
 """
-import copy
 import unittest
 from unittest import mock
 
 import pytest
 
 import tradingagents.dataflows.config as config_module
-import tradingagents.default_config as default_config
 from tradingagents.dataflows import interface
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.symbol_utils import NoMarketDataError
@@ -21,7 +19,7 @@ from tradingagents.dataflows.symbol_utils import NoMarketDataError
 def _reset_config():
     # Hard reset: set_config() merges, so empty DEFAULT dicts (e.g. tool_vendors)
     # don't clear keys leaked by other tests. Replace the global outright.
-    config_module._config = copy.deepcopy(default_config.DEFAULT_CONFIG)
+    config_module.reset_config()
 
 
 def _no_data(symbol, *a, **k):

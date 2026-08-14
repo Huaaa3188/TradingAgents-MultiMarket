@@ -3,14 +3,12 @@ missing-value handling, lookahead-safe windowing, and router integration.
 
 All API access is mocked, so these run without a network connection or a key.
 """
-import copy
 import unittest
 from unittest import mock
 
 import pytest
 
 import tradingagents.dataflows.config as config_module
-import tradingagents.default_config as default_config
 from tradingagents.dataflows import fred, interface
 from tradingagents.dataflows.config import set_config
 
@@ -154,10 +152,10 @@ class FredFormattingTests(unittest.TestCase):
 @pytest.mark.unit
 class FredRoutingTests(unittest.TestCase):
     def setUp(self):
-        config_module._config = copy.deepcopy(default_config.DEFAULT_CONFIG)
+        config_module.reset_config()
 
     def tearDown(self):
-        config_module._config = copy.deepcopy(default_config.DEFAULT_CONFIG)
+        config_module.reset_config()
 
     def test_macro_category_routes_to_fred(self):
         self.assertEqual(

@@ -3,7 +3,6 @@ ranking, formatting, graceful degradation, and router integration.
 
 All API access is mocked, so these run without a network connection.
 """
-import copy
 import unittest
 from unittest import mock
 
@@ -11,7 +10,6 @@ import pytest
 import requests
 
 import tradingagents.dataflows.config as config_module
-import tradingagents.default_config as default_config
 from tradingagents.dataflows import interface, polymarket
 from tradingagents.dataflows.config import set_config
 
@@ -105,10 +103,10 @@ class PolymarketResilienceTests(unittest.TestCase):
 @pytest.mark.unit
 class PolymarketRoutingTests(unittest.TestCase):
     def setUp(self):
-        config_module._config = copy.deepcopy(default_config.DEFAULT_CONFIG)
+        config_module.reset_config()
 
     def tearDown(self):
-        config_module._config = copy.deepcopy(default_config.DEFAULT_CONFIG)
+        config_module.reset_config()
 
     def test_category_routes_to_polymarket(self):
         self.assertEqual(

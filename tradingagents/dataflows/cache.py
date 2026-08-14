@@ -18,33 +18,44 @@ _CACHE_STATS: dict[tuple[str, str], Counter] = {}
 _NAMESPACE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
+def _cache_dir_key(namespace: str) -> tuple[str, str]:
+    """Cache-handle key: namespace plus the resolved on-disk cache directory.
+
+    The extra dimension keeps per-context configs (``data_cache_dir``) from
+    reusing a DiskCache handle opened for another context's directory.
+    """
+    return (namespace, os.path.join(get_config()["data_cache_dir"], namespace))
+
+
 def get_disk_cache(namespace: str):
     """Return the lazily initialized DiskCache for a dataflow namespace."""
     _validate_namespace(namespace)
-    active_cache = _CACHES.get(namespace, _UNINITIALIZED_CACHE)
+    key = _cache_dir_key(namespace)
+    active_cache = _CACHES.get(key, _UNINITIALIZED_CACHE)
     if active_cache is _UNINITIALIZED_CACHE:
-        cache_dir = os.path.join(get_config()["data_cache_dir"], namespace)
+        cache_dir = key[1]
         try:
             active_cache = Cache(cache_dir)
         except Exception as exc:  # noqa: BLE001 - cache failures must not block data fetches
             print(f"[Warning] Failed to initialize DiskCache at {cache_dir}: {exc}", file=sys.stderr)
             active_cache = None
-        _CACHES[namespace] = active_cache
+        _CACHES[key] = active_cache
     return active_cache
 
 
 def set_disk_cache(namespace: str, cache_obj) -> None:
     """Inject a cache object for tests or controlled runtime overrides."""
     _validate_namespace(namespace)
-    _CACHES[namespace] = cache_obj
+    _CACHES[_cache_dir_key(namespace)] = cache_obj
 
 
 def clear_disk_cache(namespace: str | None = None) -> None:
     """Forget cached Cache instances so future calls re-read current config."""
     if namespace is not None:
         _validate_namespace(namespace)
-        cache_obj = _CACHES.pop(namespace, None)
-        _close_cache(cache_obj)
+        for key in list(_CACHES):
+            if key[0] == namespace:
+                _close_cache(_CACHES.pop(key))
         return
 
     cache_objects = list(_CACHES.values())
