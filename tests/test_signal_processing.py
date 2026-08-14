@@ -66,6 +66,22 @@ class TestParseRating:
     def test_chinese_recommendation_without_english_value(self):
         assert parse_rating("**投资建议**: 卖出\n风险过高。") == "Sell"
 
+    def test_chinese_label_wins_over_secondary_rating_word(self):
+        # The authoritative 买入 label must win even when a risk note in the
+        # same line mentions a second rating word.
+        text = "**评级**: 买入 (Buy)，但需警惕卖出 (Sell) 风险。"
+        assert parse_rating(text) == "Buy"
+
+    def test_english_label_wins_over_later_prose_rating_word(self):
+        # The label's rating comes first; a later prose mention must not win.
+        text = "Rating: Buy, but a Sell trigger is set below support."
+        assert parse_rating(text) == "Buy"
+
+    def test_rating_substring_words_do_not_match(self):
+        # "holding" contains "hold" but must not parse as a rating word.
+        text = "Rating: Hold. Recommend holding through volatility."
+        assert parse_rating(text) == "Hold"
+
 
 # ---------------------------------------------------------------------------
 # SignalProcessor: thin adapter over the heuristic

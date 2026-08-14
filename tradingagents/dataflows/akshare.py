@@ -129,6 +129,16 @@ def _get_stock_result(symbol: str, start_date: str, end_date: str) -> DataResult
     result = _load_ohlcv_result(symbol, start_date, end_date)
     data = result.payload if isinstance(result.payload, pd.DataFrame) else pd.DataFrame()
     if data.empty:
+        detail = (
+            "The requested range may contain only non-trading days, holidays, "
+            "a suspension, or unavailable vendor coverage."
+        )
+        pure_code = to_akshare_symbol(normalized)
+        if pure_code.startswith("4"):
+            detail += (
+                " Codes starting with 4 are NEEQ listings, which the Beijing "
+                "exchange data loader may not cover."
+            )
         notice = data_notice(
             "no_rows",
             (
@@ -136,10 +146,7 @@ def _get_stock_result(symbol: str, start_date: str, end_date: str) -> DataResult
                 f"{start_date} and {end_date}."
             ),
             source=result.meta.source,
-            detail=(
-                "The requested range may contain only non-trading days, holidays, "
-                "a suspension, or unavailable vendor coverage."
-            ),
+            detail=detail,
         )
         return DataResult(
             meta=result.meta,
